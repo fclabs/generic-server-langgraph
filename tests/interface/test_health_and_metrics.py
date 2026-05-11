@@ -5,10 +5,13 @@ from __future__ import annotations
 import inspect
 import socket
 import urllib.request
+from collections.abc import Callable
 from contextlib import ExitStack
 from unittest.mock import patch
 
 import httpx
+import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from langgraph_runnable_server import create_app
@@ -127,6 +130,29 @@ def test_vc005_default_metrics_endpoint() -> None:
     assert response.content == b""
 
 
+def test_vc004_prefixed_health_endpoint() -> None:
+    """Given a prefixed app, when GET {base}/health, then 200, ok body, and text/plain."""
+    # Given
+    client = TestClient(create_app(prefix="/api"))
+    # When
+    response = client.get("/api/health")
+    # Then
+    assert response.status_code == 200
+    assert response.content == b"ok"
+    assert response.headers.get("content-type", "").startswith("text/plain")
+
+
+def test_vc005_prefixed_metrics_endpoint() -> None:
+    """Given a prefixed app, when GET {base}/metrics, then 200 and empty body."""
+    # Given
+    client = TestClient(create_app(prefix="/api"))
+    # When
+    response = client.get("/api/metrics")
+    # Then
+    assert response.status_code == 200
+    assert response.content == b""
+
+
 def test_vc008_health_body_byte_exact_ok_literal() -> None:
     """Given the default app, when GET /health, then body is ASCII ok with no suffix (BR-001)."""
     # Given
@@ -152,7 +178,96 @@ def test_vc009_health_does_not_invoke_network_primitives_from_route() -> None:
     assert response.content == b"ok"
 
 
+def test_vc009_prefixed_health_does_not_invoke_network_primitives_from_route() -> None:
+    """Given guarded network primitives, when GET {base}/health on a prefixed app, then clean."""
+    # Given
+    app = create_app(prefix="/api")
+    client = TestClient(app)
+    with ExitStack() as stack:
+        _patch_network_guards(stack)
+        # When
+        response = client.get("/api/health")
+    # Then
+    assert response.status_code == 200
+    assert response.content == b"ok"
+
+
 def test_vc010_metrics_registry_empty() -> None:
     """Given the metrics registry module, when reading METRICS, then the registry is empty."""
     # Given / When / Then
     assert registry.METRICS == ()
+
+
+@pytest.mark.parametrize(
+    ("factory", "health_path", "metrics_path"),
+    [
+        (lambda: create_app(), "/health", "/metrics"),
+        (lambda: create_app(prefix=""), "/health", "/metrics"),
+        (lambda: create_app(prefix="   "), "/health", "/metrics"),
+        (lambda: create_app(prefix="/api"), "/api/health", "/api/metrics"),
+    ],
+)
+def test_vc017_prefix_maps_base_urls(
+    factory: Callable[[], FastAPI],
+    health_path: str,
+    metrics_path: str,
+) -> None:
+    """Given factory variants, when probing resolved paths, then health and metrics match {base}."""
+    # Given
+    client = TestClient(factory())
+    # When
+    h = client.get(health_path)
+    m = client.get(metrics_path)
+    # Then
+    assert h.status_code == 200
+    assert h.content == b"ok"
+    assert m.status_code == 200
+    assert m.content == b""
+
+
+def test_vc018_trailing_slash_on_prefix_normalizes_like_without() -> None:
+    """Given /api/ vs /api, when GET probe paths, then both apps expose the same URLs."""
+    # Given
+    slash_client = TestClient(create_app(prefix="/api/"))
+    plain_client = TestClient(create_app(prefix="/api"))
+    # When / Then
+    for client in (slash_client, plain_client):
+        h = client.get("/api/health")
+        m = client.get("/api/metrics")
+        assert h.status_code == 200
+        assert h.content == b"ok"
+        assert m.status_code == 200
+        assert m.content == b""
+
+
+@pytest.mark.parametrize("bad_prefix", ["/api///", "/api//"])
+def test_vc018_double_slash_in_prefix_rejected_before_normalization(bad_prefix: str) -> None:
+    """Given a prefix containing //, when create_app, then ValueError and no FastAPI build."""
+    # Given
+    with patch("langgraph_runnable_server.app.FastAPI") as mock_fastapi:
+        # When / Then
+        with pytest.raises(ValueError):
+            create_app(prefix=bad_prefix)
+        mock_fastapi.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "bad_prefix",
+    [
+        "api",
+        "//",
+        "/api//v1",
+        "/a b",
+        "/a?b",
+        "/a#b",
+        "/a<b",
+    ],
+)
+def test_vc019_invalid_prefix_raises_value_error_before_fastapi(bad_prefix: str) -> None:
+    """Given invalid prefixes, when create_app, then ValueError and FastAPI is never built."""
+    # Given
+    with patch("langgraph_runnable_server.app.FastAPI") as mock_fastapi:
+        # When / Then
+        with pytest.raises(ValueError):
+            create_app(prefix=bad_prefix)
+        mock_fastapi.assert_not_called()

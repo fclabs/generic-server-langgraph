@@ -21,6 +21,20 @@ The host process owns bind address, port, and TLS; the library only supplies the
 
 See [CHANGELOG.md](CHANGELOG.md) for version notes (v0.1: default-prefix health and metrics).
 
+## Prefix
+
+`create_app(prefix=...)` sets the HTTP base path for both probes. Normalization follows **FR-011** in the spec (runs before any `FastAPI` object exists; invalid values raise `ValueError`).
+
+| Input (after ASCII trim) | Effective `{base}` | Example probe paths |
+|---------------------------|--------------------|------------------------|
+| `"/"`, `""`, whitespace-only | *(empty)* | `/health`, `/metrics` |
+| `"/api"`, `"/api/"` | `/api` | `/api/health`, `/api/metrics` |
+| Contains `//` anywhere (e.g. `"/api///"`, `"/api//v1"`) | — | *rejected* (`ValueError`) |
+| Missing leading `/` (e.g. `"api"`) | — | *rejected* |
+| Non–URL-safe character in path (space, `?`, `#`, `<`, …) | — | *rejected* |
+
+Trailing slashes are stripped after the `//` check, so `"/api/"` behaves like `"/api"`. A `//` substring is never collapsed: `"/api///"` is rejected because `//` appears before any trailing-slash normalization.
+
 ## Versions
 
 - **v0.1** — `GET /health` and `GET /metrics` on the default prefix, `app.state["instance_id"]`, and a no-op default lifespan. Details in `CHANGELOG.md`.
