@@ -35,6 +35,26 @@ See [CHANGELOG.md](CHANGELOG.md) for version notes (v0.1: default-prefix health 
 
 Trailing slashes are stripped after the `//` check, so `"/api/"` behaves like `"/api"`. A `//` substring is never collapsed: `"/api///"` is rejected because `//` appears before any trailing-slash normalization.
 
+## Host-owned lifespan
+
+Optional startup/shutdown work uses the standard FastAPI/Starlette lifespan contract (see **FR-003** / **FR-013** in the spec):
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from langgraph_runnable_server import create_app
+
+# or, with a host-owned lifespan for startup/shutdown work:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # startup: open connection pools, warm caches, etc.
+    yield
+    # shutdown: drain queues, close pools, etc.
+
+app = create_app(prefix="/api", lifespan=lifespan)
+# ASGI: uvicorn <host_module>:app  (owned by the host project)
+```
+
 ## Versions
 
 - **v0.1** — `GET /health` and `GET /metrics` on the default prefix, `app.state["instance_id"]`, and a no-op default lifespan. Details in `CHANGELOG.md`.

@@ -6,7 +6,7 @@ import inspect
 import socket
 import urllib.request
 from collections.abc import Callable
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 from unittest.mock import patch
 
 import httpx
@@ -105,6 +105,41 @@ def test_vc003a_default_lifespan_registered() -> None:
     # When / Then (no exception)
     with TestClient(app):
         pass
+
+
+def test_vc003b_host_supplied_lifespan_startup_and_shutdown() -> None:
+    """Given a host lifespan, when TestClient runs, startup in ctx and shutdown after exit."""
+
+    # Given
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state["startup_ran"] = True
+        yield
+        app.state["shutdown_ran"] = True
+
+    app = create_app(lifespan=lifespan)
+    # When / Then
+    with TestClient(app) as client:
+        client.get("/health")
+        assert app.state["startup_ran"] is True
+        assert not hasattr(app.state, "shutdown_ran")
+    assert app.state["shutdown_ran"] is True
+
+
+def test_host_lifespan_startup_error_propagates_from_test_client_enter() -> None:
+    """Given lifespan raises on startup, when TestClient enters, then RuntimeError propagates."""
+
+    # Given
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        raise RuntimeError("lifespan startup failed")
+        yield  # pragma: no cover
+
+    app = create_app(lifespan=lifespan)
+    # When / Then
+    with pytest.raises(RuntimeError, match="lifespan startup failed"):
+        with TestClient(app):
+            pass
 
 
 def test_vc004_default_health_endpoint() -> None:

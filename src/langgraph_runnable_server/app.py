@@ -77,13 +77,17 @@ def create_app(
     RFC 3986 ``pchar`` segments (including ``%HH``). Invalid prefixes raise ``ValueError``
     before any ``FastAPI`` instance is built.
 
-    Sets ``app.state[\"instance_id\"]`` (FR-001) and registers a no-op async lifespan when
-    ``lifespan`` is ``None`` (FR-003, FR-004, FR-005). The ``lifespan`` argument is accepted
-    for API stability but is not yet forwarded; that arrives in iteration 4.
+    Sets ``app.state[\"instance_id\"]`` (FR-001). The ``lifespan`` parameter is
+    **keyword-recommended** (FR-010). When ``lifespan`` is ``None`` (default), the library
+    registers a no-op async lifespan (FR-003, FR-004, FR-005). When non-``None``, the value
+    is passed to ``FastAPI(lifespan=...)`` unchanged—no wrapping or composition (FR-003,
+    FR-013); it must satisfy Starlette's ``Lifespan[FastAPI]`` contract.
     """
     base = _normalize_prefix(prefix)
-    del lifespan  # Wired in iteration 4 (FR-003); iteration 2 always uses the no-op default.
-    app = FastAPI(lifespan=_default_lifespan)
+    if lifespan is None:
+        app = FastAPI(lifespan=_default_lifespan)
+    else:
+        app = FastAPI(lifespan=lifespan)
     app.state.instance_id = str(uuid.uuid4())
     if base:
         app.include_router(health_router, prefix=base)
