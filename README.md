@@ -1,6 +1,6 @@
 # langgraph-runnable-server
 
-Minimal FastAPI library exposing health and metrics endpoints under a configurable base path. See [specs/01-fastapi-server.md](specs/01-fastapi-server.md).
+Minimal FastAPI library exposing health and metrics endpoints under a configurable base path, plus a factory that will host LangChain/LangGraph `Runnable` HTTP endpoints. See [specs/01-fastapi-server.md](specs/01-fastapi-server.md) and [specs/02-runnable-support.md](specs/02-runnable-support.md).
 
 ## Acceptance
 
@@ -28,6 +28,17 @@ curl -sS http://127.0.0.1:8000/health
 The host process owns bind address, port, and TLS; the library only supplies the ASGI `app`.
 
 Only **GET** is defined on `/health` and `/metrics` (under `{base}`); any other HTTP method on those exact paths returns **404** (not 405). See **FR-014** / **BR-006** in the spec.
+
+## Runnable HTTP surface
+
+The second factory, `create_runnable_app`, composes `create_app` and validates runnable keys, prefixes, probe-path collisions, and the Prometheus metric namespace at factory time. **v0.2 (current development)** ships that validation and stores `app.state["metrics_namespace"]`; it does **not** yet register `POST …/invoke` or `POST …/batch` (those land in later iterations per [specs/02-runnable-support.md](specs/02-runnable-support.md)). This “factory-only” note is removed once the full surface is documented in iter 6 of the implementation plan.
+
+```python
+from langgraph_runnable_server import create_runnable_app
+
+# Example only — runnable routes are not registered until a later release.
+app = create_runnable_app(prefix="/agents", runnables={})
+```
 
 See [CHANGELOG.md](CHANGELOG.md) for version notes (v0.1: default-prefix health and metrics).
 

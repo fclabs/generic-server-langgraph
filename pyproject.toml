@@ -5,12 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "langgraph-runnable-server"
 version = "0.1.0"
-description = "Minimal FastAPI library exposing health and metrics endpoints under a configurable base path. See specs/01-fastapi-server.md."
+description = "Minimal FastAPI library exposing health and metrics under a configurable base path, plus a factory for a future runnable HTTP surface (invoke/batch). See specs/01-fastapi-server.md and specs/02-runnable-support.md."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.136.0",
+    "langchain-core>=1.3.0",
+    "prometheus-client>=0.21.0",
     "starlette>=1.0.0",
+    "structlog>=24.4.0",
 ]
 
 [dependency-groups]

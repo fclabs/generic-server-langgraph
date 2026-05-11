@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2 (unreleased)
+
+- **`create_runnable_app` factory (iteration 1):** keyword-only API composing `create_app`; factory-time validation for plain-`dict` `runnables`, runnable key regex, `metrics_namespace` type and identifier regex, shared prefix normalization (`_prefix` module), and strict path-overlap checks vs probe `/health` and `/metrics` paths. Sets `app.state["metrics_namespace"]`. No runnable HTTP routes yet.
+- **Dependencies:** `langchain-core`, `structlog`, and `prometheus-client` added with explicit lower bounds (see `pyproject.toml`).
+
 ## v1.0 — 2026-05-11
 
 - **Spec v1.8 fully implemented** (see [specs/01-fastapi-server.md](specs/01-fastapi-server.md)): library is host-ready; VC-021 acceptance test in `tests/interface/test_acceptance.py`.

@@ -1,8 +1,9 @@
 def test_import_surface() -> None:
-    """Given the installed package, when importing, then only create_app is public."""
+    """Given the package, when importing, then both public factories are exported."""
     import langgraph_runnable_server as p
 
-    assert p.__all__ == ["create_app"]
-    from langgraph_runnable_server import create_app
+    assert p.__all__ == ["create_app", "create_runnable_app"]
+    from langgraph_runnable_server import create_app, create_runnable_app
 
     assert callable(create_app)
+    assert callable(create_runnable_app)
