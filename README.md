@@ -70,6 +70,14 @@ Metric **names** are composed from `metrics_namespace` (keyword argument, defaul
 
 **Request size (BR-203):** when `Transfer-Encoding: chunked` is present, the `request_size_bytes` histogram is not observed for that request. For other **422** responses, if `Content-Length` is present and numeric it is used for the observation when applicable; otherwise the size may be omitted per the spec.
 
+**Logging**
+
+Apps from `create_runnable_app` emit **exactly one** structlog **INFO** event per HTTP request (probes, metrics scrape, runnable routes, and unmatched paths). The event name is `http_request`. Fields follow **BR-301**: `http.method`, `http.route` (matched route path, or `request.url.path` when there is no route), `http.status_code`, `duration_ms` (float), `instance_id`, optional `runnable` / `endpoint` (omitted on probes), `request_size_bytes` when known (**same omit rule as BR-203** for metrics), `response_size_bytes` (always an integer), optional `trace_id` (32 hex chars from a valid lowercase W3C `traceparent` header), and on runnable **500** errors `error.type` plus `error.stack` (never sent to the client). Cooperative cancellation (**BR-108**) is logged with `http.status_code` **499** when `request.state.cancelled` is set (best-effort; logging must not raise into cancellation cleanup).
+
+The module `langgraph_runnable_server.logging` exposes `structlog.get_logger("langgraph_runnable_server")` only; it does **not** call `structlog.configure` at import (**NFR-108**). Configure processors and sinks in the host application.
+
+Run Uvicorn with **`access_log=False`** so per-request access lines are not duplicated; rely on the library wide event instead (**FR-131**, **FR-132**). The library does not attach stdlib handlers to `uvicorn.access` or `fastapi`.
+
 ```python
 from langgraph_runnable_server import create_runnable_app
 

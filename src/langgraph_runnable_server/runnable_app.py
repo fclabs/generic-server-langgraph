@@ -62,10 +62,13 @@ as ``http.route`` (e.g. ``/agents/agent1/invoke``), not a parameterized ``/agent
 :class:`prometheus_client.registry.CollectorRegistry` stored at ``app.state["metrics_registry"]``,
 with five families built by :func:`langgraph_runnable_server.metrics.families.build_metrics`
 (see that module for names and labels). Runnable handlers set ``request.state.runnable``,
-``request.state.endpoint``, and ``request.state.metrics_request_size`` (optional, per BR-203);
-:class:`_RunnableMetricsMiddleware` records counters and histograms only when the runnable markers
-are present, so probe ``GET /health`` and ``GET /metrics`` never increment runnable families
-(BR-106).
+``request.state.endpoint``, and ``request.state.metrics_request_size`` (optional, per BR-203).
+
+**Logging (iteration 5):** :class:`_RunnableRequestMiddleware` records runnable Prometheus samples
+only when runnable markers are present (BR-106), and emits exactly one structlog **INFO** wide
+event per HTTP request (``http_request``) with BR-301 fields (see
+:mod:`langgraph_runnable_server.logging`). Timing for ``duration_ms`` and
+``request_duration_seconds`` uses a single ``perf_counter`` span around ``call_next``.
 """
 
 from __future__ import annotations
@@ -82,41 +85,24 @@ from fastapi.responses import JSONResponse
 from langchain_core.runnables import Runnable
 from prometheus_client import CollectorRegistry
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from starlette.types import Lifespan
+from structlog.exceptions import DropEvent
 
 from ._prefix import _normalize_prefix
 from .app import create_app
+from .logging import (
+    format_error_stack,
+    http_route_for_request,
+    log,
+    parse_trace_id,
+    request_body_size_bytes_br203,
+    wide_event_request_size_bytes,
+)
 from .metrics.families import MetricFamilies, build_metrics
 
 _KEY_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _METRICS_NAMESPACE_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-
-
-def _transfer_encoding_chunked(request: Request) -> bool:
-    raw = request.headers.get("transfer-encoding")
-    if raw is None:
-        return False
-    return "chunked" in raw.lower()
-
-
-def _metrics_request_body_size_bytes(
-    request: Request, body_bytes: bytes, *, http_status: int
-) -> int | None:
-    """BR-203: omit request-size observation when chunked; 422 uses Content-Length when valid."""
-    if _transfer_encoding_chunked(request):
-        return None
-    if http_status == 422:
-        cl = request.headers.get("content-length")
-        if cl is None:
-            return None
-        try:
-            n = int(cl.strip())
-        except ValueError:
-            return None
-        if n < 0:
-            return None
-        return n
-    return len(body_bytes)
 
 
 def _content_type_media_type(content_type: str | None) -> str | None:
@@ -147,8 +133,8 @@ async def _load_json_object(request: Request) -> dict[str, Any]:
     return cast(dict[str, Any], parsed)
 
 
-class _RunnableMetricsMiddleware(BaseHTTPMiddleware):
-    """Observe runnable invoke/batch traffic; no-op unless ``request.state.runnable`` is set."""
+class _RunnableRequestMiddleware(BaseHTTPMiddleware):
+    """Prometheus metrics for runnable routes (BR-106) + one structlog wide event per request."""
 
     def __init__(self, app, *, families: MetricFamilies) -> None:
         super().__init__(app)
@@ -156,33 +142,105 @@ class _RunnableMetricsMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         t0 = time.perf_counter()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except asyncio.CancelledError:
+            t1 = time.perf_counter()
+            self._complete(request, None, t0, t1, cancelled=True)
+            raise
+        t1 = time.perf_counter()
+        self._complete(request, response, t0, t1, cancelled=False)
+        return response
+
+    def _complete(
+        self,
+        request: Request,
+        response: Response | None,
+        t0: float,
+        t1: float,
+        *,
+        cancelled: bool,
+    ) -> None:
+        if getattr(request.state, "_http_request_wide_event_done", False):
+            return
+        request.state._http_request_wide_event_done = True
+
+        elapsed_s = t1 - t0
+        duration_ms = elapsed_s * 1000.0
+
+        if response is not None:
+            runnable = getattr(request.state, "runnable", None)
+            endpoint = getattr(request.state, "endpoint", None)
+            if runnable is not None and endpoint is not None:
+                labels = {"runnable": runnable, "endpoint": endpoint}
+                self._families.requests_total.labels(**labels).inc()
+                status = response.status_code
+                if 400 <= status < 500:
+                    self._families.errors_total.labels(
+                        runnable=runnable, endpoint=endpoint, http_status_class="4xx"
+                    ).inc()
+                elif status >= 500:
+                    self._families.errors_total.labels(
+                        runnable=runnable, endpoint=endpoint, http_status_class="5xx"
+                    ).inc()
+                self._families.request_duration_seconds.labels(**labels).observe(elapsed_s)
+                rsz = getattr(request.state, "metrics_request_size", None)
+                if rsz is not None:
+                    self._families.request_size_bytes.labels(**labels).observe(rsz)
+                resp_len = getattr(request.state, "metrics_response_size", None)
+                if resp_len is None:
+                    raw = getattr(response, "body", None) or b""
+                    resp_len = len(raw)
+                self._families.response_size_bytes.labels(**labels).observe(resp_len)
+
+        if cancelled or getattr(request.state, "cancelled", False):
+            status_code = 499
+        elif response is not None:
+            status_code = response.status_code
+        else:
+            status_code = 500
+
+        route = http_route_for_request(request)
+        inst = getattr(request.app.state, "instance_id", None)
+        instance_id = str(inst) if inst is not None else ""
+
+        rsz_log = wide_event_request_size_bytes(request, http_status=status_code)
+        if response is not None:
+            raw_body = getattr(response, "body", None) or b""
+            resp_size = len(raw_body)
+        else:
+            resp_size = 0
+
+        fields: dict[str, Any] = {
+            "http.method": request.method,
+            "http.route": route,
+            "http.status_code": status_code,
+            "duration_ms": duration_ms,
+            "instance_id": instance_id,
+            "response_size_bytes": resp_size,
+        }
+        tid = parse_trace_id(request.headers.get("traceparent"))
+        if tid is not None:
+            fields["trace_id"] = tid
         runnable = getattr(request.state, "runnable", None)
         endpoint = getattr(request.state, "endpoint", None)
-        if runnable is None or endpoint is None:
-            return response
-        labels = {"runnable": runnable, "endpoint": endpoint}
-        self._families.requests_total.labels(**labels).inc()
-        status = response.status_code
-        if 400 <= status < 500:
-            self._families.errors_total.labels(
-                runnable=runnable, endpoint=endpoint, http_status_class="4xx"
-            ).inc()
-        elif status >= 500:
-            self._families.errors_total.labels(
-                runnable=runnable, endpoint=endpoint, http_status_class="5xx"
-            ).inc()
-        elapsed = time.perf_counter() - t0
-        self._families.request_duration_seconds.labels(**labels).observe(elapsed)
-        rsz = getattr(request.state, "metrics_request_size", None)
-        if rsz is not None:
-            self._families.request_size_bytes.labels(**labels).observe(rsz)
-        resp_len = getattr(request.state, "metrics_response_size", None)
-        if resp_len is None:
-            raw = getattr(response, "body", None) or b""
-            resp_len = len(raw)
-        self._families.response_size_bytes.labels(**labels).observe(resp_len)
-        return response
+        if runnable is not None and endpoint is not None:
+            fields["runnable"] = runnable
+            fields["endpoint"] = endpoint
+        if rsz_log is not None:
+            fields["request_size_bytes"] = rsz_log
+
+        exc = getattr(request.state, "exception", None)
+        if exc is not None:
+            fields["error.type"] = type(exc).__name__
+            fields["error.stack"] = format_error_stack(exc)
+
+        try:
+            log.info("http_request", **fields)
+        except DropEvent:
+            pass
+        except Exception:
+            pass
 
 
 def _probe_paths(probe_base: str) -> tuple[str, str]:
@@ -229,13 +287,13 @@ def _make_invoke_handler(key: str, runnable: Runnable):
             body = await _load_json_object(request)
         except HTTPException:
             body_bytes = getattr(request.state, "_last_request_body_bytes", b"")
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=422
             )
             raise
         body_bytes: bytes = getattr(request.state, "_last_request_body_bytes", b"")
         if "input" not in body:
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=422
             )
             raise HTTPException(
@@ -251,14 +309,14 @@ def _make_invoke_handler(key: str, runnable: Runnable):
             raise
         except Exception as exc:
             request.state.exception = exc
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=500
             )
             resp = JSONResponse({"detail": str(exc)}, status_code=500)
             request.state.metrics_response_size = len(resp.body)
             return resp
         resp = JSONResponse(content=jsonable_encoder(result), status_code=200)
-        request.state.metrics_request_size = _metrics_request_body_size_bytes(
+        request.state.metrics_request_size = request_body_size_bytes_br203(
             request, body_bytes, http_status=200
         )
         request.state.metrics_response_size = len(resp.body)
@@ -275,13 +333,13 @@ def _make_batch_handler(key: str, runnable: Runnable):
             body = await _load_json_object(request)
         except HTTPException:
             body_bytes = getattr(request.state, "_last_request_body_bytes", b"")
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=422
             )
             raise
         body_bytes: bytes = getattr(request.state, "_last_request_body_bytes", b"")
         if "inputs" not in body:
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=422
             )
             raise HTTPException(
@@ -290,7 +348,7 @@ def _make_batch_handler(key: str, runnable: Runnable):
             )
         inputs = body["inputs"]
         if not isinstance(inputs, list):
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=422
             )
             raise HTTPException(
@@ -299,7 +357,7 @@ def _make_batch_handler(key: str, runnable: Runnable):
             )
         if inputs == []:
             resp = JSONResponse(content=[], status_code=200)
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=200
             )
             request.state.metrics_response_size = len(resp.body)
@@ -312,14 +370,14 @@ def _make_batch_handler(key: str, runnable: Runnable):
             raise
         except Exception as exc:
             request.state.exception = exc
-            request.state.metrics_request_size = _metrics_request_body_size_bytes(
+            request.state.metrics_request_size = request_body_size_bytes_br203(
                 request, body_bytes, http_status=500
             )
             resp = JSONResponse({"detail": str(exc)}, status_code=500)
             request.state.metrics_response_size = len(resp.body)
             return resp
         resp = JSONResponse(content=jsonable_encoder(result), status_code=200)
-        request.state.metrics_request_size = _metrics_request_body_size_bytes(
+        request.state.metrics_request_size = request_body_size_bytes_br203(
             request, body_bytes, http_status=200
         )
         request.state.metrics_response_size = len(resp.body)
@@ -369,7 +427,7 @@ def create_runnable_app(
     app.state["metrics_namespace"] = metrics_namespace
     app.state["metrics_registry"] = registry
 
-    app.add_middleware(_RunnableMetricsMiddleware, families=metric_families)
+    app.add_middleware(_RunnableRequestMiddleware, families=metric_families)
 
     for key, runnable in runnables.items():
         invoke_p = _invoke_path(runnables_base, key)
