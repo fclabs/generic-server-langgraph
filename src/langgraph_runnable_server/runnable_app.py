@@ -1,75 +1,4 @@
-"""FastAPI factory: probe app from ``create_app`` plus per-key runnable HTTP routes.
-
-Public API::
-
-    def create_runnable_app(
-        *,
-        prefix: str,
-        runnables: dict[str, Runnable],
-        create_app_prefix: str = "/",
-        lifespan: Lifespan[FastAPI] | None = None,
-        metrics_namespace: str = "langgraph_runnable_server",
-    ) -> FastAPI: ...
-
-Validation order:
-
-1. ``runnables`` must be a plain ``dict`` (else ``TypeError``; ``UserDict`` /
-   ``MappingProxyType`` rejected).
-2. ``metrics_namespace`` must be ``str`` (else ``TypeError``); empty allowed; non-empty must match
-   ``^[a-zA-Z_][a-zA-Z0-9_]*$`` (else ``ValueError``).
-3. Every key must match ``^[A-Za-z0-9._-]{1,64}$`` (``ValueError``).
-4. Runnable ``prefix``: same normalization as ``create_app`` / FR-011 (``_normalize_prefix``).
-5. Path collision (FR-108): each ``{runnables_base}/{key}/invoke|batch`` vs
-   ``{probe_base}/health`` and ``{probe_base}/metrics`` using **strict overlap** (not equality
-   only): equal paths; runnable under a probe prefix; or probe under a runnable prefix
-   (shadowing). Covers VC-114 (e.g. ``prefix="/health"``, key ``x``) despite FR-108 "full path"
-   wording.
-
-After validation, **POST** routes are registered with **literal paths** per runnable key (no
-``{key}`` path parameter), so unknown keys yield FastAPI's default **404**. For each key ``k`` in
-``runnables``:
-
-* ``POST {runnables_base}/k/invoke`` — JSON object with ``input`` (required; any JSON value,
-  including ``null``) and optional ``config``; response **200** and JSON from ``jsonable_encoder``
-  (BR-103).
-* ``POST {runnables_base}/k/batch`` — object with ``inputs`` (required; must be a JSON array) and
-  optional ``config``; response **200** and ``jsonable_encoder`` of the batch result. If
-  ``inputs`` is ``[]``, the handler returns ``[]`` **without** calling ``abatch`` (BR-102).
-
-When ``runnables_base`` is empty (normalized runnable prefix is root), paths are
-``POST /{k}/invoke`` and ``POST /{k}/batch``.
-
-**Error responses**
-
-* **422** — Client / body validation: JSON ``{"detail": "<message>"}``. Triggers include: non-empty
-  body without ``Content-Type: application/json`` (media type, case-insensitive); JSON parse
-  failure; root JSON value not an object; ``invoke`` without an ``input`` key; ``batch`` without
-  ``inputs`` or ``inputs`` not a list.
-* **500** — Uncaught ``Exception`` from ``ainvoke`` / ``abatch``: ``{"detail": "<message>"}`` (no
-  traceback in the response). The exception object is stored on ``request.state.exception`` for
-  later logging (iter 5). ``BaseException`` subclasses outside ``Exception`` (e.g.
-  ``asyncio.CancelledError``) are not handled here and propagate per BR-108.
-* **405** — Non-``POST`` on a registered runnable path (Starlette default).
-* **404** — Unknown runnable key (no matching route).
-
-**Cancellation (BR-108):** cooperative cancellation is not swallowed; on ``asyncio.CancelledError``
-the handler sets ``request.state.cancelled`` to a true value and re-raises.
-
-**Route template note (VC-109 / BR-301):** logging in iter 5 will treat the registered path string
-as ``http.route`` (e.g. ``/agents/agent1/invoke``), not a parameterized ``/agents/{key}/invoke``.
-
-**Metrics (iteration 4):** each ``create_runnable_app`` call uses a dedicated
-:class:`prometheus_client.registry.CollectorRegistry` stored at ``app.state["metrics_registry"]``,
-with five families built by :func:`langgraph_runnable_server.metrics.families.build_metrics`
-(see that module for names and labels). Runnable handlers set ``request.state.runnable``,
-``request.state.endpoint``, and ``request.state.metrics_request_size`` (optional, per BR-203).
-
-**Logging (iteration 5):** :class:`_RunnableRequestMiddleware` records runnable Prometheus samples
-only when runnable markers are present (BR-106), and emits exactly one structlog **INFO** wide
-event per HTTP request (``http_request``) with BR-301 fields (see
-:mod:`langgraph_runnable_server.logging`). Timing for ``duration_ms`` and
-``request_duration_seconds`` uses a single ``perf_counter`` span around ``call_next``.
-"""
+"""Runnable HTTP factory, middleware, and handlers (see ``specs/02-runnable-support.md``)."""
 
 from __future__ import annotations
 
@@ -134,7 +63,7 @@ async def _load_json_object(request: Request) -> dict[str, Any]:
 
 
 class _RunnableRequestMiddleware(BaseHTTPMiddleware):
-    """Prometheus metrics for runnable routes (BR-106) + one structlog wide event per request."""
+    """Runnable Prometheus (BR-106) + one structlog ``http_request`` event per request (FR-130)."""
 
     def __init__(self, app, *, families: MetricFamilies) -> None:
         super().__init__(app)
@@ -394,6 +323,7 @@ def create_runnable_app(
     lifespan: Lifespan[FastAPI] | None = None,
     metrics_namespace: str = "langgraph_runnable_server",
 ) -> FastAPI:
+    """Compose probes plus per-key ``POST …/invoke`` and ``POST …/batch`` (FR-110, spec 02)."""
     if not isinstance(runnables, dict):
         raise TypeError("runnables must be a dict")
 

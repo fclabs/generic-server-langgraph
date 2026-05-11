@@ -1,4 +1,4 @@
-"""Health probe route (GET /health)."""
+"""GET ``/health`` probe (spec 01)."""
 
 from fastapi import APIRouter, Response
 

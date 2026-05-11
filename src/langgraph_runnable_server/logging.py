@@ -1,33 +1,4 @@
-"""Structured logging helpers for ``create_runnable_app`` (FR-130, BR-301, NFR-108).
-
-The library uses ``structlog.get_logger("langgraph_runnable_server")`` only. It does **not**
-call ``structlog.configure`` at import time; the host owns processor chains and output sinks.
-
-**Wide event** (middleware, **INFO**, event name ``"http_request"``) fields — omit means the key
-is absent from the event dict (not ``None``):
-
-* ``http.method`` — ``str``, HTTP verb.
-* ``http.route`` — ``str``: matched route path template when routing matched (literal per-key
-  runnable paths, e.g. ``/agents/agent1/invoke``); for probes ``{probe_base}/health`` or
-  ``{probe_base}/metrics``; if there is no matched route (e.g. **404**), the literal path
-  ``request.url.path`` (BR-301 / VC-109 literal-path registration note).
-* ``http.status_code`` — ``int``; cooperative cancellation (``request.state.cancelled``) is
-  logged as **499** (best-effort) even though no HTTP response is returned to the client.
-* ``duration_ms`` — ``float``, wall time for the request in milliseconds.
-* ``instance_id`` — ``str`` from ``app.state.instance_id``.
-* ``runnable`` — ``str``, runnable key; **omit** on probe and non-runnable traffic.
-* ``endpoint`` — ``"invoke"`` or ``"batch"``; **omit** when ``runnable`` is omitted.
-* ``request_size_bytes`` — non-negative ``int`` when the request body size is known per **BR-203**
-  (same rule as the Prometheus ``request_size_bytes`` histogram); **omit** when chunked or
-  otherwise unknowable.
-* ``response_size_bytes`` — non-negative ``int``, **always** present (``0`` if there is no
-  response body object, e.g. cancellation).
-* ``trace_id`` — 32-char lowercase hex from W3C ``traceparent`` when the header matches the
-  spec regex; **omit** otherwise.
-* ``error.type`` — ``str``, exception class name when ``request.state.exception`` is set.
-* ``error.stack`` — ``str``, formatted traceback for that exception (VC-118); only with
-  ``error.type``.
-"""
+"""Structlog helpers and wide-event field rules (FR-130, BR-301, NFR-108; see README NFR-110)."""
 
 from __future__ import annotations
 
@@ -45,18 +16,17 @@ TRACEPARENT_RE = re.compile(
 
 
 def parse_trace_id(traceparent: str | None) -> str | None:
-    """Return the 32-char trace id from ``traceparent`` or ``None`` to omit the log field."""
+    """Parse W3C ``traceparent`` into a 32-char hex trace id, or ``None`` to omit (BR-301)."""
     if traceparent is None:
         return None
     raw = traceparent.strip()
     if not TRACEPARENT_RE.fullmatch(raw):
         return None
-    # version-trace_id-span_id-flags
     return raw.split("-", 3)[1]
 
 
 def transfer_encoding_chunked(request: Request) -> bool:
-    """True when ``Transfer-Encoding`` lists ``chunked`` (BR-203 omit path)."""
+    """Return True when ``Transfer-Encoding`` includes ``chunked`` (BR-203)."""
     hdr = request.headers.get("transfer-encoding")
     if hdr is None:
         return False
@@ -66,7 +36,7 @@ def transfer_encoding_chunked(request: Request) -> bool:
 def request_body_size_bytes_br203(
     request: Request, body_bytes: bytes, *, http_status: int
 ) -> int | None:
-    """BR-203: size for metrics / wide event, or ``None`` to omit."""
+    """Request body size for metrics when allowed by BR-203, else ``None``."""
     if transfer_encoding_chunked(request):
         return None
     if http_status == 422:
@@ -88,7 +58,7 @@ def wide_event_request_size_bytes(
     *,
     http_status: int,
 ) -> int | None:
-    """Resolve ``request_size_bytes`` for the wide event (BR-203 + probes / unmatched)."""
+    """``request_size_bytes`` for the wide event (BR-203 + probe paths)."""
     rsz = getattr(request.state, "metrics_request_size", None)
     if rsz is not None:
         return rsz
@@ -103,7 +73,7 @@ def wide_event_request_size_bytes(
 
 
 def http_route_for_request(request: Request) -> str:
-    """Registered route path, or literal URL path when unrouted."""
+    """Return matched route path, or ``request.url.path`` when unrouted (BR-301)."""
     route = request.scope.get("route")
     path = getattr(route, "path", None)
     if isinstance(path, str) and path:
@@ -112,5 +82,5 @@ def http_route_for_request(request: Request) -> str:
 
 
 def format_error_stack(exc: BaseException) -> str:
-    """Formatted traceback string for ``error.stack``."""
+    """Format ``exc`` as a traceback string for ``error.stack`` (VC-118)."""
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))

@@ -1,13 +1,17 @@
 # Changelog
 
-## v0.2 (unreleased)
+## v0.2.0 — 2026-05-11
 
-- **`create_runnable_app` factory (iteration 1):** keyword-only API composing `create_app`; factory-time validation for plain-`dict` `runnables`, runnable key regex, `metrics_namespace` type and identifier regex, shared prefix normalization (`_prefix` module), and strict path-overlap checks vs probe `/health` and `/metrics` paths. Sets `app.state["metrics_namespace"]`.
-- **Runnable routes (iteration 2, happy path):** `POST {runnables_base}/{key}/invoke` and `POST {runnables_base}/{key}/batch` registered per key with literal paths; `jsonable_encoder` for responses; empty `inputs` returns `[]` without `abatch`; malformed JSON → **422**.
-- **Runnable validation & errors (iteration 3):** `Content-Type` guard for non-empty bodies; JSON parse and shape validation with `{"detail": "..."}` for all **422**; runnable `Exception` → **500** with the same envelope (no traceback to client) and `request.state.exception`; **405** on non-POST; cooperative cancellation sets `request.state.cancelled` and re-raises `CancelledError`.
-- **Prometheus metrics (iteration 4):** per-app `CollectorRegistry` at `app.state["metrics_registry"]`; five namespaced families (`requests_total`, `request_duration_seconds`, `errors_total`, `request_size_bytes`, `response_size_bytes`) with BR-202 histogram buckets; conditional `GET /metrics` exposition; runnable-only middleware instrumentation (BR-106 probe isolation, BR-203 request-size rules).
-- **Structured logging (iteration 5):** unified `_RunnableRequestMiddleware` (single `perf_counter` span) emits one structlog `http_request` wide event per request with BR-301 fields, shared BR-203 request-size logic with metrics, W3C `traceparent` parsing, `error.type` / `error.stack` on runnable failures, and **499** on cooperative cancellation; new `logging.py` module (no `structlog.configure` at import, **NFR-108**); no stdlib access handlers added (**FR-131** / **FR-132**).
-- **Dependencies:** `langchain-core`, `structlog`, and `prometheus-client` added with explicit lower bounds (see `pyproject.toml`).
+Runnable HTTP surface for LangChain/LangGraph `Runnable` instances, composed on top of the spec-01 probe app.
+
+- **Iteration 1 — factory:** `create_runnable_app` (keyword-only) validates plain-`dict` `runnables`, key regex (**BR-107**), `metrics_namespace` (**FR-123**), shared prefix normalization (**FR-111**), and strict probe path overlap (**FR-108**). Exposes `app.state["metrics_namespace"]`.
+- **Iteration 2 — routes:** literal `POST …/invoke` and `POST …/batch` per key; `jsonable_encoder` responses (**BR-103**); empty `inputs` short-circuit (**BR-102**); host `lifespan` and `create_app_prefix` forwarded unwrapped (**FR-112**).
+- **Iteration 3 — errors:** `Content-Type` and JSON shape validation with `{"detail": …}` (**BR-104**, **BR-109**); runnable `Exception` → 500 without traceback to clients (**FR-109**); **405** / **404** discipline (**BR-105**); cooperative cancellation (**BR-108**).
+- **Iteration 4 — metrics:** per-app `CollectorRegistry` at `app.state["metrics_registry"]` (**FR-122**); five namespaced Prometheus families with **BR-202** buckets; conditional `GET /metrics` exposition (**FR-120**); runnable-only instrumentation with **BR-106** and **BR-203** request-size rules.
+- **Iteration 5 — logging:** one structlog `http_request` wide event per request (**FR-130**, **BR-301**, **NFR-107**); `error.type` / `error.stack` on failures (**VC-118**); **499** on cancellation; `logging` module without `structlog.configure` at import (**NFR-108**); no stdlib access handlers (**FR-131**, **FR-132**).
+- **Iteration 6 — acceptance & docs:** VC-120 end-to-end test `tests/interface/test_runnable_acceptance.py::test_full_runnable_surface`; README runnable sections, NFR-110 field summary, NFR-111 security boundary; version **0.2.0**.
+
+**Dependencies:** `langchain-core`, `structlog`, `prometheus-client` (pinned floors in `pyproject.toml` / `uv.lock`).
 
 ## v1.0 — 2026-05-11
 

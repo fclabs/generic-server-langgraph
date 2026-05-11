@@ -1,20 +1,4 @@
-"""Prometheus metric families for the runnable HTTP surface (spec 02, iteration 4).
-
-Registers five families on a caller-supplied :class:`prometheus_client.registry.CollectorRegistry`
-(never the process-default ``REGISTRY``):
-
-* ``requests_total`` — labels ``runnable``, ``endpoint`` (``invoke`` | ``batch``).
-* ``request_duration_seconds`` — same labels; histogram with **BR-202** buckets
-  ``(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)`` plus ``+Inf``.
-* ``errors_total`` — labels ``runnable``, ``endpoint``, ``http_status_class`` (``4xx`` | ``5xx``).
-* ``request_size_bytes`` — same labels as duration; request-body size histogram (BR-203 omit rules
-  applied in middleware/handlers, not here).
-* ``response_size_bytes`` — same; response-body size histogram.
-
-Metric **names** in exposition: if ``namespace`` is empty, names are the bases above; otherwise
-``{namespace}_{base}`` (explicit composition — no ``prometheus_client`` ``namespace=`` argument
-for the empty case).
-"""
+"""Prometheus runnable metric families (spec 02, FR-120–FR-123, BR-201–BR-203)."""
 
 from __future__ import annotations
 
@@ -43,7 +27,7 @@ def _full_metric_name(namespace: str, base: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class MetricFamilies:
-    """Handles to the five runnable metric objects (all bound to one registry)."""
+    """The five runnable counters/histograms bound to one ``CollectorRegistry``."""
 
     requests_total: Counter
     request_duration_seconds: Histogram
@@ -53,10 +37,7 @@ class MetricFamilies:
 
 
 def build_metrics(namespace: str, registry: CollectorRegistry) -> MetricFamilies:
-    """Register the five runnable metric families on ``registry`` and return handles.
-
-    ``namespace`` must already satisfy FR-123 (empty or identifier); empty means no name prefix.
-    """
+    """Register the five runnable metric families on ``registry`` and return handles (FR-120)."""
 
     def name(base: str) -> str:
         return _full_metric_name(namespace, base)

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langgraph-runnable-server"
-version = "0.1.0"
-description = "Minimal FastAPI library exposing health and metrics under a configurable base path, plus a factory for a future runnable HTTP surface (invoke/batch). See specs/01-fastapi-server.md and specs/02-runnable-support.md."
+version = "0.2.0"
+description = "Minimal FastAPI library: configurable health/metrics probes (create_app) plus LangGraph/LangChain Runnable HTTP invoke/batch, Prometheus metrics, and structlog wide events (create_runnable_app). See specs/01-fastapi-server.md and specs/02-runnable-support.md."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -51,3 +51,4 @@ include = ["src", "tests"]
 
 [tool.pytest.ini_options]
 pythonpath = ["tests/interface"]
+markers = ["slow: optional slow or cancellation tests (not excluded by default)"]

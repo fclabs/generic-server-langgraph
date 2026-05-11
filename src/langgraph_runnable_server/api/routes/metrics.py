@@ -1,4 +1,4 @@
-"""Metrics scrape route (GET /metrics)."""
+"""GET ``/metrics``; Prometheus text when ``app.state.metrics_registry`` is set (specs 01–02)."""
 
 from fastapi import APIRouter, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
