@@ -2,6 +2,14 @@
 
 Minimal FastAPI library exposing health and metrics endpoints under a configurable base path. See [specs/01-fastapi-server.md](specs/01-fastapi-server.md).
 
+## Acceptance
+
+End-to-end public surface is covered by **VC-021** in a single test:
+
+```bash
+uv run pytest tests/interface/test_acceptance.py::test_full_public_surface -q
+```
+
 ## Quick start
 
 ```python
@@ -59,4 +67,5 @@ app = create_app(prefix="/api", lifespan=lifespan)
 
 ## Versions
 
+- **v1.0** (spec v1.8) — 2026-05-11: full spec implementation; see `CHANGELOG.md`.
 - **v0.1** — `GET /health` and `GET /metrics` on the default prefix, `app.state["instance_id"]`, and a no-op default lifespan. Details in `CHANGELOG.md`.
