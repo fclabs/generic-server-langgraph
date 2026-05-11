@@ -29,14 +29,31 @@ After validation, **POST** routes are registered with **literal paths** per runn
 ``{key}`` path parameter), so unknown keys yield FastAPI's default **404**. For each key ``k`` in
 ``runnables``:
 
-* ``POST {runnables_base}/k/invoke`` — body JSON object with ``input`` and optional ``config``;
-  response **200** and JSON from ``jsonable_encoder`` (BR-103).
-* ``POST {runnables_base}/k/batch`` — body with ``inputs`` (JSON array) and optional ``config``;
-  response **200** and ``jsonable_encoder`` of the batch result. If ``inputs`` is ``[]``, the
-  handler returns ``[]`` **without** calling ``abatch`` (BR-102).
+* ``POST {runnables_base}/k/invoke`` — JSON object with ``input`` (required; any JSON value,
+  including ``null``) and optional ``config``; response **200** and JSON from ``jsonable_encoder``
+  (BR-103).
+* ``POST {runnables_base}/k/batch`` — object with ``inputs`` (required; must be a JSON array) and
+  optional ``config``; response **200** and ``jsonable_encoder`` of the batch result. If
+  ``inputs`` is ``[]``, the handler returns ``[]`` **without** calling ``abatch`` (BR-102).
 
 When ``runnables_base`` is empty (normalized runnable prefix is root), paths are
 ``POST /{k}/invoke`` and ``POST /{k}/batch``.
+
+**Error responses**
+
+* **422** — Client / body validation: JSON ``{"detail": "<message>"}``. Triggers include: non-empty
+  body without ``Content-Type: application/json`` (media type, case-insensitive); JSON parse
+  failure; root JSON value not an object; ``invoke`` without an ``input`` key; ``batch`` without
+  ``inputs`` or ``inputs`` not a list.
+* **500** — Uncaught ``Exception`` from ``ainvoke`` / ``abatch``: ``{"detail": "<message>"}`` (no
+  traceback in the response). The exception object is stored on ``request.state.exception`` for
+  later logging (iter 5). ``BaseException`` subclasses outside ``Exception`` (e.g.
+  ``asyncio.CancelledError``) are not handled here and propagate per BR-108.
+* **405** — Non-``POST`` on a registered runnable path (Starlette default).
+* **404** — Unknown runnable key (no matching route).
+
+**Cancellation (BR-108):** cooperative cancellation is not swallowed; on ``asyncio.CancelledError``
+the handler sets ``request.state.cancelled`` to a true value and re-raises.
 
 **Route template note (VC-109 / BR-301):** logging in iter 5 will treat the registered path string
 as ``http.route`` (e.g. ``/agents/agent1/invoke``), not a parameterized ``/agents/{key}/invoke``.
@@ -44,8 +61,10 @@ as ``http.route`` (e.g. ``/agents/agent1/invoke``), not a parameterized ``/agent
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -58,6 +77,33 @@ from .app import create_app
 
 _KEY_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _METRICS_NAMESPACE_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def _content_type_media_type(content_type: str | None) -> str | None:
+    if content_type is None:
+        return None
+    stripped = content_type.strip()
+    if not stripped:
+        return None
+    return stripped.split(";", 1)[0].strip().lower() or None
+
+
+async def _load_json_object(request: Request) -> dict[str, Any]:
+    body_bytes = await request.body()
+    if len(body_bytes) > 0:
+        media = _content_type_media_type(request.headers.get("content-type"))
+        if media != "application/json":
+            raise HTTPException(
+                status_code=422,
+                detail="Content-Type must be application/json",
+            )
+    try:
+        parsed: object = json.loads(body_bytes.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail="JSON body must be an object")
+    return cast(dict[str, Any], parsed)
 
 
 def _probe_paths(probe_base: str) -> tuple[str, str]:
@@ -98,13 +144,22 @@ def _batch_path(runnables_base: str, key: str) -> str:
 
 def _make_invoke_handler(runnable: Runnable):
     async def handler(request: Request) -> JSONResponse:
-        try:
-            body = await request.json()
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="Invalid JSON body") from exc
+        body = await _load_json_object(request)
+        if "input" not in body:
+            raise HTTPException(
+                status_code=422,
+                detail="Request body must include an 'input' key",
+            )
         input_ = body["input"]
         config = body.get("config")
-        result = await runnable.ainvoke(input_, config=config)
+        try:
+            result = await runnable.ainvoke(input_, config=config)
+        except asyncio.CancelledError:
+            request.state.cancelled = True
+            raise
+        except Exception as exc:
+            request.state.exception = exc
+            return JSONResponse({"detail": str(exc)}, status_code=500)
         return JSONResponse(content=jsonable_encoder(result), status_code=200)
 
     return handler
@@ -112,15 +167,29 @@ def _make_invoke_handler(runnable: Runnable):
 
 def _make_batch_handler(runnable: Runnable):
     async def handler(request: Request) -> JSONResponse:
-        try:
-            body = await request.json()
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=422, detail="Invalid JSON body") from exc
+        body = await _load_json_object(request)
+        if "inputs" not in body:
+            raise HTTPException(
+                status_code=422,
+                detail="Request body must include an 'inputs' key",
+            )
         inputs = body["inputs"]
+        if not isinstance(inputs, list):
+            raise HTTPException(
+                status_code=422,
+                detail="'inputs' must be a JSON array",
+            )
         if inputs == []:
             return JSONResponse(content=[], status_code=200)
         config = body.get("config")
-        result = await runnable.abatch(inputs, config=config)
+        try:
+            result = await runnable.abatch(inputs, config=config)
+        except asyncio.CancelledError:
+            request.state.cancelled = True
+            raise
+        except Exception as exc:
+            request.state.exception = exc
+            return JSONResponse({"detail": str(exc)}, status_code=500)
         return JSONResponse(content=jsonable_encoder(result), status_code=200)
 
     return handler

@@ -44,6 +44,10 @@ quote-style = "double"
 [tool.ty.environment]
 python-version = "3.12"
 root = ["./src"]
+extra-paths = ["./tests/interface"]
 
 [tool.ty.src]
 include = ["src", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["tests/interface"]

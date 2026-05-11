@@ -42,6 +42,20 @@ The second factory, `create_runnable_app`, composes `create_app`, runs factory-t
 
 Successful calls return **200** with a JSON body produced by FastAPI’s `jsonable_encoder` (no LangChain `dumpd` envelope). See **BR-103** in spec 02.
 
+**Error handling**
+
+Runnable routes use a single JSON error envelope: `{"detail": "<message>"}`.
+
+| Situation | HTTP status | Notes |
+|-----------|-------------|--------|
+| Non-`POST` on a registered `…/invoke` or `…/batch` path | **405** | Routes are registered with `methods=["POST"]` only (BR-105). |
+| Unknown runnable key (no matching route) | **404** | Literal per-key registration. |
+| Non-empty body without `Content-Type: application/json` (media type, case-insensitive) | **422** | Exact detail: `Content-Type must be application/json`. |
+| Invalid JSON, JSON root not an object, missing `input` / `inputs`, or `inputs` not an array | **422** | `detail` explains the failure; `null` **is** allowed for `input`. |
+| Uncaught exception from `ainvoke` / `abatch` | **500** | Same envelope; **no** traceback or stack frames in the response body (FR-109). The exception object is stored on `request.state.exception` for host logging (e.g. structlog in a later iteration). |
+
+On cooperative **cancellation** (client disconnect / cancelled waiter), `asyncio.CancelledError` is not swallowed: it propagates to the runnable, and `request.state.cancelled` is set so logging can treat the request as cancelled (BR-108).
+
 ```python
 from langgraph_runnable_server import create_runnable_app
 
