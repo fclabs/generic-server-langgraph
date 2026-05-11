@@ -1,10 +1,10 @@
 # Implementation Plan: Generic FastAPI Server (Library)
 
-**Spec:** [`specs/01-fastapi-server.md`](./01-fastapi-server.md) (v1.8, 2026-05-11)
+**Spec:** [`specs/01-fastapi-server.md`](./01-fastapi-server.md) (v1.9, 2026-05-11)
 
 **Summary:** Build the `langgraph-runnable-server` Python library exposing a single public callable `create_app(prefix, lifespan)` that returns a FastAPI app with `{base}/health` and `{base}/metrics` endpoints, per-app `instance_id` on `app.state`, and a configurable lifespan. Project tooling (uv, ruff, ty, pinned Python 3.12, committed `uv.lock`) is set up in iteration 1; functional surface is built incrementally across iterations 2–5; a final end-to-end acceptance test (VC-021) lands in iteration 6.
 
-> **Review note:** This plan is generated against spec v1.8. The spec has not been formally run through `/review-spec` in this session; the changelog (1.0 → 1.8) shows iterative refinements resolving review action items, "Open Questions" is `None`, and every VC is concrete. If a formal review report is required by process, run `/review-spec` first and reconcile any `[MUST]` items before starting iteration 1.
+> **Review note:** This plan is generated against spec v1.9. The spec has not been formally run through `/review-spec` in this session; the changelog (1.0 → 1.9) shows iterative refinements resolving review action items, "Open Questions" is `None`, and every VC is concrete. If a formal review report is required by process, run `/review-spec` first and reconcile any `[MUST]` items before starting iteration 1.
 
 ---
 
@@ -74,7 +74,7 @@
   Pass `lifespan=_default_lifespan` when the caller did not supply one. (Host-supplied lifespan support comes in iter 4, but the wiring path must already accept it being `None`.)
 - Implement `api/routes/health.py`:
   - APIRouter (or plain function on a router) for `GET /health` (no prefix on the router itself in this iter; the router is `include_router`'d at the app level without a prefix).
-  - Response: status 200, `Content-Type: text/plain` (or `text/plain; charset=utf-8` per A-006), body **exactly** the three ASCII bytes `b"ok"` — no trailing newline. Use `Response(content=b"ok", media_type="text/plain")` to avoid framework-injected newlines.
+  - Response: status 200, `Content-Type: text/plain` (or `text/plain; charset=utf-8` per A-006), body **exactly** the two ASCII bytes `b"ok"` — no trailing newline. Use `Response(content=b"ok", media_type="text/plain")` to avoid framework-injected newlines.
   - Handler must be a pure function — no external I/O (BR-002).
 - Implement `api/routes/metrics.py`:
   - `GET /metrics` returning status 200 with zero-length body. Use `Response(content=b"", status_code=200)` or equivalent (avoid any default Prometheus body).
@@ -83,9 +83,9 @@
   - VC-001: `app = create_app(); assert isinstance(app.state["instance_id"], str) and len(app.state["instance_id"]) > 0`; UUID-v4-ish (length 36 with dashes, or document equivalent).
   - VC-002: `a = create_app(); b = create_app(); assert a.state["instance_id"] != b.state["instance_id"]`.
   - VC-003a: `app = create_app(); assert app.router.lifespan_context is not None`; `with TestClient(app): pass` completes without raising.
-  - VC-004 (default only): `TestClient(create_app()).get("/health")` → 200, `.content == b"ok"` (length 3, no trailing newline), `Content-Type` starts with `text/plain`.
+  - VC-004 (default only): `TestClient(create_app()).get("/health")` → 200, `.content == b"ok"` (length 2, no trailing newline), `Content-Type` starts with `text/plain`.
   - VC-005 (default only): `TestClient(create_app()).get("/metrics")` → 200, `.content == b""`.
-  - VC-008: byte-exact equality `response.content == b"ok"` (already covered by VC-004 — keep an explicit byte-length assertion `len(response.content) == 3`).
+  - VC-008: byte-exact equality `response.content == b"ok"` (already covered by VC-004 — keep an explicit byte-length assertion `len(response.content) == 2`).
   - VC-009: patch `socket.socket`, `socket.socket.connect`, `socket.socket.connect_ex`, `httpx.Client.send`, `httpx.AsyncClient.send`, and `urllib.request.urlopen` with replacements that raise `AssertionError("health must not perform external I/O: <call>")`. Issue `GET /health` against `TestClient(create_app())` and assert 200 + `b"ok"` with no patched primitive invoked. (Prefixed app variant added in iter 3.)
   - VC-010: import `langgraph_runnable_server.metrics.registry` from inside the test and assert its empty-registry shape (e.g. `assert registry.METRICS == ()` or whatever the chosen structure is). Combined with VC-005's empty-body check.
 
@@ -337,8 +337,8 @@
 
 **Documentation updates**:
 - `README.md`: top-of-file "Acceptance" section that references VC-021 and how to run it (`uv run pytest tests/interface/test_acceptance.py::test_full_public_surface -q`).
-- `CHANGELOG.md` (or README changelog section): mark "v1.0: spec v1.8 fully implemented" with date.
-- Re-read the spec's §Changelog (entries 1.0 → 1.8) and confirm the implementation matches the **current** (1.8) behavior in every place. Note any discrepancies in the PR description, not the code.
+- `CHANGELOG.md` (or README changelog section): mark "v1.0: spec v1.9 fully implemented" with date.
+- Re-read the spec's §Changelog (entries 1.0 → 1.9) and confirm the implementation matches the **current** (1.9) behavior in every place. Note any discrepancies in the PR description, not the code.
 
 **Commit message** (draft):
 - `feat: end-to-end acceptance test (VC-021) and final docs`
@@ -347,14 +347,14 @@
 
 ## Final Verification
 
-Cross-check every requirement from spec v1.8 against the iteration that implements it and how to verify:
+Cross-check every requirement from spec v1.9 against the iteration that implements it and how to verify:
 
 | Requirement | VC(s)         | Iteration(s) | Verification                                                                                              |
 |-------------|---------------|--------------|-----------------------------------------------------------------------------------------------------------|
 | FR-001      | VC-001        | Iter 2       | `pytest` asserts `app.state["instance_id"]` is non-empty string and stable for the app's lifetime.        |
 | FR-002      | VC-002        | Iter 2       | `pytest` asserts two `create_app()` calls in one process produce distinct UUID-v4 strings.                |
 | FR-003      | VC-003a, VC-003b | Iter 2, 4 | Iter 2 wires the no-op default (`app.router.lifespan_context is not None`); iter 4 verifies host-supplied lifespan runs startup AND shutdown via `TestClient` context. |
-| FR-004      | VC-004, VC-008 | Iter 2, 3   | `GET {base}/health` → 200, body `b"ok"` (length 3, no trailing newline), `text/plain` content-type, for default and prefixed apps. |
+| FR-004      | VC-004, VC-008 | Iter 2, 3   | `GET {base}/health` → 200, body `b"ok"` (length 2, no trailing newline), `text/plain` content-type, for default and prefixed apps. |
 | FR-005      | VC-005        | Iter 2, 3    | `GET {base}/metrics` → 200, empty body, for default and prefixed apps.                                    |
 | FR-006      | VC-006        | Iter 1       | File-tree inspection: `src/langgraph_runnable_server/` has `__init__.py` (`__all__ == ["create_app"]`), `py.typed`, app module, `api/routes/{health,metrics}.py`, `metrics/registry.py`. |
 | FR-007      | VC-006        | Iter 1       | `pyproject.toml` `[project].name == "langgraph-runnable-server"`; import name `langgraph_runnable_server` matches under PEP 503. |

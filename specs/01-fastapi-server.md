@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.8 |
+| Version | 1.9 |
 | Last Updated | 2026-05-11 |
 | Status | Draft |
 
@@ -97,7 +97,7 @@ Let **`{base}`** be the path prefix computed from the `prefix` argument per **FR
 
 ## Business Rules
 
-- **BR-001** — **Health body literal.** The liveness response body must be exactly the three ASCII octets for **`ok`** (lowercase), with **no** leading or trailing bytes—**no** newline or other suffix after `ok`. *Rationale:* probes and scripts often string-match; case sensitivity and exact length avoid ambiguity. *Exceptions:* none in this release.
+- **BR-001** — **Health body literal.** The liveness response body must be exactly the two ASCII octets for **`ok`** (lowercase), with **no** leading or trailing bytes—**no** newline or other suffix after `ok`. *Rationale:* probes and scripts often string-match; case sensitivity and exact length avoid ambiguity. *Exceptions:* none in this release.
 - **BR-002** — **Health independence.** **`GET {base}/health`** must not perform I/O that depends on databases, caches, or third-party APIs. *Rationale:* liveness must reflect the process, not downstream outages. *Exceptions:* none.
 - **BR-003** — **Metrics placeholder.** Until extended, **`{base}/metrics`** returns 200 with empty body; the registry module remains a structural stub (internal). *Rationale:* stable relative path for future Prometheus text. *Exceptions:* documented extension in a future spec only.
 - **BR-004** — **Base path from `create_app(prefix=...)`.** All library HTTP routes hang under **`{base}`** derived from `prefix`. Default **`prefix="/"`**, **`prefix=""`**, or **whitespace-only** `prefix` (after **FR-011** trim) means **`{base}`** is empty: **`/health`** and **`/metrics`**. The host passes `prefix` to match their URL layout; they must not expect different paths without changing `prefix`. *Rationale:* one explicit knob instead of undocumented mounting. *Exceptions:* none.
@@ -250,7 +250,7 @@ The criterion has two parts; **both** must hold.
 
 - **Scenario:** Client requests liveness for default and non-default base paths.
 - **Input/State:** `TestClient(create_app())` → `GET /health`; `TestClient(create_app(prefix="/api"))` → `GET /api/health` (or another validated non-root prefix per tests).
-- **Expected Result:** Status 200; raw body equals ASCII **`ok`** with length **3** and **no** trailing newline (**BR-001**); `Content-Type` is **`text/plain`** or **`text/plain; charset=utf-8`** (**A-006**).
+- **Expected Result:** Status 200; raw body equals ASCII **`ok`** with length **2** and **no** trailing newline (**BR-001**); `Content-Type` is **`text/plain`** or **`text/plain; charset=utf-8`** (**A-006**).
 - **Failure Mode Covered:** Wrong path after prefix, wrong status, JSON body, wrong text, dependency on external failure.
 
 ### FR-005 — Metrics placeholder
@@ -325,7 +325,7 @@ The criterion has two parts; **both** must hold.
 
 - **Scenario:** Health endpoint byte or string equality for resolved `{base}/health`.
 - **Input/State:** At minimum `GET /health` on `create_app()`; optionally repeat for a prefixed app.
-- **Expected Result:** Raw body **exactly** three octets **`ok`** per **BR-001** (no **`ok\n`** or **`ok\r\n`**); `Content-Type` per **A-006** where asserted.
+- **Expected Result:** Raw body **exactly** two octets **`ok`** per **BR-001** (no **`ok\n`** or **`ok\r\n`**); `Content-Type` per **A-006** where asserted.
 - **Failure Mode Covered:** `OK`, `ok\n`, JSON-wrapped text, any suffix after `ok`.
 
 ### BR-002 — No external I/O in health
@@ -446,7 +446,7 @@ The criterion has two parts; **both** must hold.
          h = client.get("/health")
          m = client.get("/metrics")
          assert h.status_code == 200
-         assert h.content == b"ok"  # BR-001: exactly three octets, no trailing newline
+         assert h.content == b"ok"  # BR-001: exactly two octets, no trailing newline
          assert h.headers["content-type"].startswith("text/plain")
          assert m.status_code == 200
          assert m.content == b""
@@ -500,3 +500,4 @@ None.
 | 1.6 | 2026-05-11 | Resolves review action items 4–7. **(4)** Rewrote VC-009 from a PR-checklist fallback into a concrete automated test: patches `socket.socket`/`connect`, `httpx.Client.send`, `httpx.AsyncClient.send`, and `urllib.request.urlopen` to explode if invoked, then asserts `GET /health` and `GET /api/health` succeed without touching any of them. **(5)** Added VC-021, an end-to-end acceptance test that exercises default + prefixed apps, instance-id stability and uniqueness, `/health`/`/metrics` bodies and statuses, 404 on un-prefixed paths of a prefixed app, lifespan via `TestClient` context, and `__all__` discipline in a single test. **(6)** Added a one-line rationale to FR-001 explaining `app.state["instance_id"]` over a module-level singleton (per-app isolation, no import-time side effects, multi-app processes). **(7)** Reordered the FR sections so "Package layout and discoverability" (FR-006/007) sits immediately before "Public API (library)" (FR-009/010/011/012), making the two groups contiguous. Did **not** renumber FRs or VCs — that remains a separate, traceability-impacting change if ever desired. |
 | 1.7 | 2026-05-11 | Resolved former open questions on **prefix** and health body. **`prefix=""`** (and whitespace-only after trim) normalizes to root **`"/"`**; **`//`** and other **FR-011** violations raise **`ValueError`**; minimum “valid URL path” rule uses RFC 3986 **`pchar`**. **BR-001** / **FR-004** now forbid any trailing newline after **`ok`**. **A-006** documents acceptable **`text/plain`** charset. **BR-004**, **FR-008**, **FR-010**, **FR-011**, **BR-005** updated; **VC-004**, **VC-008**, **VC-017**, **VC-019** updated; Open Questions cleared. |
 | 1.8 | 2026-05-11 | **FR-014** / **BR-006**: any non-**GET** to **`{base}/health`** or **`{base}/metrics`** must return **404** (not **405**). **VC-022** and **FR-008** test hook; HTTP table section and **VC-021** failure-mode list updated. |
+| 1.9 | 2026-05-11 | **BR-001**, **VC-004**, **VC-008**, **VC-021**: corrected the health body from “three octets” to **two** octets for ASCII **`ok`** (`b"ok"` is two bytes). |
