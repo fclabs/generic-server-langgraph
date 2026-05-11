@@ -1,4 +1,4 @@
-"""Factory-time validation for create_runnable_app (VC-106, VC-106b, VC-112, VC-114, FR-111/112)."""
+"""Unit tests for create_runnable_app factory validation (no HTTP)."""
 
 from __future__ import annotations
 
@@ -7,20 +7,10 @@ import types
 from typing import Any, cast
 
 import pytest
-from fastapi.testclient import TestClient
 from langchain_core.runnables import Runnable
 
 from langgraph_runnable_server import create_runnable_app
-
-
-class StubRunnable:
-    """Minimal stand-in for a LangChain Runnable (invoke/batch only used from iter 2 onward)."""
-
-    async def ainvoke(self, input, config=None):
-        return {"echo": input}
-
-    async def abatch(self, inputs, config=None):
-        return [{"echo": i} for i in inputs]
+from stub_runnable import StubRunnable
 
 
 @pytest.fixture
@@ -150,31 +140,3 @@ def test_fr111_valid_prefix_normalized(stub: StubRunnable, valid_prefix: str) ->
     )
     # Then
     assert app.__class__.__name__ == "FastAPI"
-
-
-def test_fr112_create_app_prefix_forwarding(stub: StubRunnable) -> None:
-    """Given create_app_prefix='/api', when serving the app, then probes live under /api only."""
-    # Given
-    app = create_runnable_app(prefix="/agents", runnables={}, create_app_prefix="/api")
-    # When
-    with TestClient(app) as client:
-        ok = client.get("/api/health")
-        miss = client.get("/health")
-    # Then
-    assert ok.status_code == 200
-    assert ok.content == b"ok"
-    assert miss.status_code == 404
-
-
-def test_empty_runnables_probe_only(stub: StubRunnable) -> None:
-    """Empty runnables: GET /health works; POST …/invoke for unknown key returns 404."""
-    # Given
-    app = create_runnable_app(prefix="/agents", runnables={})
-    # When
-    with TestClient(app) as client:
-        health = client.get("/health")
-        invoke = client.post("/agents/foo/invoke", json={"input": {}})
-    # Then
-    assert health.status_code == 200
-    assert health.content == b"ok"
-    assert invoke.status_code == 404

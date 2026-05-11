@@ -44,11 +44,15 @@ quote-style = "double"
 [tool.ty.environment]
 python-version = "3.12"
 root = ["./src"]
-extra-paths = ["./tests/interface"]
+extra-paths = ["./tests/unit", "./tests/interface"]
 
 [tool.ty.src]
 include = ["src", "tests"]
 
 [tool.pytest.ini_options]
-pythonpath = ["tests/interface"]
-markers = ["slow: optional slow or cancellation tests (not excluded by default)"]
+pythonpath = ["src", "tests/unit", "tests/interface"]
+markers = [
+    "slow: optional slow or cancellation tests (not excluded by default)",
+    "unit: factory and validation tests without serving HTTP",
+    "interface: API contract tests using TestClient or ASGI HTTP",
+]

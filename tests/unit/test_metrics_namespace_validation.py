@@ -9,14 +9,7 @@ from fastapi import FastAPI
 from langchain_core.runnables import Runnable
 
 from langgraph_runnable_server import create_runnable_app
-
-
-class StubRunnable:
-    async def ainvoke(self, input, config=None):
-        return {"echo": input}
-
-    async def abatch(self, inputs, config=None):
-        return [{"echo": i} for i in inputs]
+from stub_runnable import StubRunnable
 
 
 @pytest.fixture
