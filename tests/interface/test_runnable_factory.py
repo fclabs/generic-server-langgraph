@@ -167,7 +167,7 @@ def test_fr112_create_app_prefix_forwarding(stub: StubRunnable) -> None:
 
 
 def test_empty_runnables_probe_only(stub: StubRunnable) -> None:
-    """Empty runnables: GET /health works; POST …/invoke is absent until iter 2."""
+    """Empty runnables: GET /health works; POST …/invoke for unknown key returns 404."""
     # Given
     app = create_runnable_app(prefix="/agents", runnables={})
     # When

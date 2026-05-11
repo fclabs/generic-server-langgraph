@@ -31,13 +31,39 @@ Only **GET** is defined on `/health` and `/metrics` (under `{base}`); any other 
 
 ## Runnable HTTP surface
 
-The second factory, `create_runnable_app`, composes `create_app` and validates runnable keys, prefixes, probe-path collisions, and the Prometheus metric namespace at factory time. **v0.2 (current development)** ships that validation and stores `app.state["metrics_namespace"]`; it does **not** yet register `POST …/invoke` or `POST …/batch` (those land in later iterations per [specs/02-runnable-support.md](specs/02-runnable-support.md)). This “factory-only” note is removed once the full surface is documented in iter 6 of the implementation plan.
+The second factory, `create_runnable_app`, composes `create_app`, runs factory-time validation (keys, prefix normalization, probe path overlap, `metrics_namespace`), stores `app.state["metrics_namespace"]`, and registers **one literal POST path per runnable key** for `invoke` and `batch`. See [specs/02-runnable-support.md](specs/02-runnable-support.md).
+
+**Request bodies**
+
+- `POST {prefix}/{key}/invoke` — JSON object with required `input` (any JSON value, including `null`) and optional `config` (passed to `Runnable.ainvoke`).
+- `POST {prefix}/{key}/batch` — JSON object with required `inputs` (JSON array) and optional `config`. If `inputs` is `[]`, the server returns `[]` without calling `abatch`.
+
+**Responses**
+
+Successful calls return **200** with a JSON body produced by FastAPI’s `jsonable_encoder` (no LangChain `dumpd` envelope). See **BR-103** in spec 02.
 
 ```python
 from langgraph_runnable_server import create_runnable_app
 
-# Example only — runnable routes are not registered until a later release.
-app = create_runnable_app(prefix="/agents", runnables={})
+class Echo:
+    async def ainvoke(self, input, config=None):
+        return {"echo": input}
+    async def abatch(self, inputs, config=None):
+        return [{"echo": i} for i in inputs]
+
+app = create_runnable_app(
+    prefix="/agents",
+    runnables={"foo": Echo()},
+)
+```
+
+With Uvicorn on port 8000:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/agents/foo/invoke \
+  -H 'Content-Type: application/json' \
+  -d '{"input": {"q": "hello"}}'
+# {"echo":{"q":"hello"}}
 ```
 
 See [CHANGELOG.md](CHANGELOG.md) for version notes (v0.1: default-prefix health and metrics).

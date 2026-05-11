@@ -1,4 +1,4 @@
-"""Probe-only FastAPI factory: runnable options validated before any ``FastAPI`` exists.
+"""FastAPI factory: probe app from ``create_app`` plus per-key runnable HTTP routes.
 
 Public API::
 
@@ -25,15 +25,31 @@ Validation order:
    (shadowing). Covers VC-114 (e.g. ``prefix="/health"``, key ``x``) despite FR-108 "full path"
    wording.
 
-Runnable HTTP routes are **not** registered yet — iter 2 adds ``POST …/invoke`` and
-``POST …/batch``.
+After validation, **POST** routes are registered with **literal paths** per runnable key (no
+``{key}`` path parameter), so unknown keys yield FastAPI's default **404**. For each key ``k`` in
+``runnables``:
+
+* ``POST {runnables_base}/k/invoke`` — body JSON object with ``input`` and optional ``config``;
+  response **200** and JSON from ``jsonable_encoder`` (BR-103).
+* ``POST {runnables_base}/k/batch`` — body with ``inputs`` (JSON array) and optional ``config``;
+  response **200** and ``jsonable_encoder`` of the batch result. If ``inputs`` is ``[]``, the
+  handler returns ``[]`` **without** calling ``abatch`` (BR-102).
+
+When ``runnables_base`` is empty (normalized runnable prefix is root), paths are
+``POST /{k}/invoke`` and ``POST /{k}/batch``.
+
+**Route template note (VC-109 / BR-301):** logging in iter 5 will treat the registered path string
+as ``http.route`` (e.g. ``/agents/agent1/invoke``), not a parameterized ``/agents/{key}/invoke``.
 """
 
 from __future__ import annotations
 
+import json
 import re
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from langchain_core.runnables import Runnable
 from starlette.types import Lifespan
 
@@ -66,6 +82,48 @@ def _paths_collide(a: str, b: str) -> bool:
     if b.startswith(a + "/"):
         return True
     return False
+
+
+def _invoke_path(runnables_base: str, key: str) -> str:
+    if runnables_base:
+        return f"{runnables_base}/{key}/invoke"
+    return f"/{key}/invoke"
+
+
+def _batch_path(runnables_base: str, key: str) -> str:
+    if runnables_base:
+        return f"{runnables_base}/{key}/batch"
+    return f"/{key}/batch"
+
+
+def _make_invoke_handler(runnable: Runnable):
+    async def handler(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Invalid JSON body") from exc
+        input_ = body["input"]
+        config = body.get("config")
+        result = await runnable.ainvoke(input_, config=config)
+        return JSONResponse(content=jsonable_encoder(result), status_code=200)
+
+    return handler
+
+
+def _make_batch_handler(runnable: Runnable):
+    async def handler(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Invalid JSON body") from exc
+        inputs = body["inputs"]
+        if inputs == []:
+            return JSONResponse(content=[], status_code=200)
+        config = body.get("config")
+        result = await runnable.abatch(inputs, config=config)
+        return JSONResponse(content=jsonable_encoder(result), status_code=200)
+
+    return handler
 
 
 def create_runnable_app(
@@ -104,4 +162,11 @@ def create_runnable_app(
 
     app = create_app(prefix=create_app_prefix, lifespan=lifespan)
     app.state["metrics_namespace"] = metrics_namespace
+
+    for key, runnable in runnables.items():
+        invoke_p = _invoke_path(runnables_base, key)
+        batch_p = _batch_path(runnables_base, key)
+        app.add_api_route(invoke_p, _make_invoke_handler(runnable), methods=["POST"])
+        app.add_api_route(batch_p, _make_batch_handler(runnable), methods=["POST"])
+
     return app
