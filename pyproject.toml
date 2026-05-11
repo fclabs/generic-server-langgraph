@@ -55,4 +55,5 @@ markers = [
     "slow: optional slow or cancellation tests (not excluded by default)",
     "unit: factory and validation tests without serving HTTP",
     "interface: API contract tests using TestClient or ASGI HTTP",
+    "integration: real LangChain runnables (e.g. fake LLMs) with HTTP surface",
 ]
