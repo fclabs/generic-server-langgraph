@@ -31,7 +31,7 @@ Only **GET** is defined on `/health` and `/metrics` (under `{base}`); any other 
 
 ## Runnable HTTP surface
 
-The second factory, `create_runnable_app`, composes `create_app`, runs factory-time validation (keys, prefix normalization, probe path overlap, `metrics_namespace`), stores `app.state["metrics_namespace"]`, and registers **one literal POST path per runnable key** for `invoke` and `batch`. See [specs/02-runnable-support.md](specs/02-runnable-support.md).
+The second factory, `create_runnable_app`, composes `create_app`, runs factory-time validation (keys, prefix normalization, probe path overlap, `metrics_namespace`), stores `app.state["metrics_namespace"]` and a per-app Prometheus `CollectorRegistry` at `app.state["metrics_registry"]`, and registers **one literal POST path per runnable key** for `invoke` and `batch`. See [specs/02-runnable-support.md](specs/02-runnable-support.md).
 
 **Request bodies**
 
@@ -55,6 +55,20 @@ Runnable routes use a single JSON error envelope: `{"detail": "<message>"}`.
 | Uncaught exception from `ainvoke` / `abatch` | **500** | Same envelope; **no** traceback or stack frames in the response body (FR-109). The exception object is stored on `request.state.exception` for host logging (e.g. structlog in a later iteration). |
 
 On cooperative **cancellation** (client disconnect / cancelled waiter), `asyncio.CancelledError` is not swallowed: it propagates to the runnable, and `request.state.cancelled` is set so logging can treat the request as cancelled (BR-108).
+
+**Metrics**
+
+`GET {base}/metrics` returns Prometheus text exposition (`Content-Type` from `prometheus_client.CONTENT_TYPE_LATEST`) for apps built with `create_runnable_app`. Apps from `create_app` alone keep an empty metrics body (spec 01).
+
+Metric **names** are composed from `metrics_namespace` (keyword argument, default `langgraph_runnable_server`): non-empty namespaces prefix the five families as `{namespace}_requests_total`, `{namespace}_request_duration_seconds`, `{namespace}_errors_total`, `{namespace}_request_size_bytes`, and `{namespace}_response_size_bytes`. If `metrics_namespace=""`, the names are exactly `requests_total`, `request_duration_seconds`, `errors_total`, `request_size_bytes`, and `response_size_bytes`.
+
+**Labels:** `requests_total`, `request_duration_seconds`, `request_size_bytes`, and `response_size_bytes` use `runnable` (runnable key) and `endpoint` (`invoke` or `batch`). `errors_total` adds `http_status_class` (`4xx` or `5xx`). Label cardinality is bounded by `len(runnables) * 2` endpoints per **NFR-105**.
+
+**Duration buckets (BR-202):** `(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)` plus `+Inf`.
+
+**Probe isolation (BR-106):** scraping `GET /metrics` or calling `GET /health` does **not** increment the runnable metric families; only traffic that runs a runnable `invoke` or `batch` handler does.
+
+**Request size (BR-203):** when `Transfer-Encoding: chunked` is present, the `request_size_bytes` histogram is not observed for that request. For other **422** responses, if `Content-Length` is present and numeric it is used for the observation when applicable; otherwise the size may be omitted per the spec.
 
 ```python
 from langgraph_runnable_server import create_runnable_app
