@@ -19,6 +19,8 @@ curl -sS http://127.0.0.1:8000/health
 
 The host process owns bind address, port, and TLS; the library only supplies the ASGI `app`.
 
+Only **GET** is defined on `/health` and `/metrics` (under `{base}`); any other HTTP method on those exact paths returns **404** (not 405). See **FR-014** / **BR-006** in the spec.
+
 See [CHANGELOG.md](CHANGELOG.md) for version notes (v0.1: default-prefix health and metrics).
 
 ## Prefix

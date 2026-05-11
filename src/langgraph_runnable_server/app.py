@@ -6,6 +6,9 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 from starlette.types import Lifespan
 
 from .api.routes.health import router as health_router
@@ -22,6 +25,24 @@ _HEX = frozenset("0123456789abcdefABCDEF")
 @asynccontextmanager
 async def _default_lifespan(app: FastAPI):
     yield
+
+
+class _ProbeNonGetReturns404Middleware(BaseHTTPMiddleware):
+    """Reject non-GET requests on probe URLs with 404 (FR-014, BR-006).
+
+    Starlette would otherwise answer **405 Method Not Allowed** for routes registered only
+    for ``GET``. This middleware is registered **last** so it runs **first** on the request
+    and short-circuits before routing.
+    """
+
+    def __init__(self, app, probe_paths: frozenset[str]) -> None:
+        super().__init__(app)
+        self._probe_paths = probe_paths
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method != "GET" and request.url.path in self._probe_paths:
+            return Response(status_code=404)
+        return await call_next(request)
 
 
 def _normalize_prefix(prefix: str) -> str:
@@ -82,6 +103,9 @@ def create_app(
     registers a no-op async lifespan (FR-003, FR-004, FR-005). When non-``None``, the value
     is passed to ``FastAPI(lifespan=...)`` unchanged—no wrapping or composition (FR-003,
     FR-013); it must satisfy Starlette's ``Lifespan[FastAPI]`` contract.
+
+    Non-``GET`` requests to ``{base}/health`` or ``{base}/metrics`` return **404** (not 405);
+    see **FR-014** / **BR-006** — enforced by :class:`_ProbeNonGetReturns404Middleware`.
     """
     base = _normalize_prefix(prefix)
     if lifespan is None:
@@ -92,7 +116,11 @@ def create_app(
     if base:
         app.include_router(health_router, prefix=base)
         app.include_router(metrics_router, prefix=base)
+        probe_paths = frozenset({f"{base}/health", f"{base}/metrics"})
     else:
         app.include_router(health_router)
         app.include_router(metrics_router)
+        probe_paths = frozenset({"/health", "/metrics"})
+    # Last registered = outermost = runs first (before routing emits 405 on probe paths).
+    app.add_middleware(_ProbeNonGetReturns404Middleware, probe_paths=probe_paths)
     return app
