@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langgraph-runnable-server"
-version = "0.1.0"
-description = "Minimal FastAPI library exposing health and metrics endpoints under a configurable base path. See specs/01-fastapi-server.md."
+version = "0.2.0"
+description = "Minimal FastAPI library: configurable health/metrics probes (create_app) plus LangGraph/LangChain Runnable HTTP invoke/batch, Prometheus metrics, and structlog wide events (create_runnable_app). See specs/01-fastapi-server.md and specs/02-runnable-support.md."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.136.0",
+    "langchain-core>=1.3.0",
+    "prometheus-client>=0.21.0",
     "starlette>=1.0.0",
+    "structlog>=24.4.0",
 ]
 
 [dependency-groups]
@@ -41,6 +44,16 @@ quote-style = "double"
 [tool.ty.environment]
 python-version = "3.12"
 root = ["./src"]
+extra-paths = ["./tests/unit", "./tests/interface"]
 
 [tool.ty.src]
 include = ["src", "tests"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests/unit", "tests/interface"]
+markers = [
+    "slow: optional slow or cancellation tests (not excluded by default)",
+    "unit: factory and validation tests without serving HTTP",
+    "interface: API contract tests using TestClient or ASGI HTTP",
+    "integration: real LangChain runnables (e.g. fake LLMs) with HTTP surface",
+]

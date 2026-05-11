@@ -48,4 +48,4 @@ def test_full_public_surface():
     # 6. __all__ discipline
     import langgraph_runnable_server as p
 
-    assert p.__all__ == ["create_app"]
+    assert p.__all__ == ["create_app", "create_runnable_app"]
